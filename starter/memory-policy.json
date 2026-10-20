@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:GetMemory",
+        "bedrock-agentcore:CreateEvent",
+        "bedrock-agentcore:RetrieveMemoryRecords"
+      ],
+      "Resource": "arn:aws:bedrock-agentcore:us-east-1:391446743765:memory/csai_csai_agentMemory-LCEDeT3iCa"
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Customer Support Demo API",
+    "version": "1.0.0",
+    "description": "Public REST API target for testing customer support MCP integration"
+  },
+  "servers": [
+    {
+      "url": "https://jsonplaceholder.typicode.com"
+    }
+  ],
+  "paths": {
+    "/todos/{id}": {
+      "get": {
+        "operationId": "getTodo",
+        "summary": "Get a demo task by ID",
+        "description": "Retrieve a task record from the public JSONPlaceholder API.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Task ID, from 1 to 200"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "userId": {"type": "integer"},
+                    "id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "completed": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
