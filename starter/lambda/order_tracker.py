@@ -98,6 +98,14 @@ def lambda_handler(event, context):
     """
     print(f"Event: {json.dumps(event)}")
 
+    # Support direct AgentCore Gateway tool arguments.
+    if "resource" not in event and "order_id" in event:
+        order_id = str(event["order_id"]).upper()
+        order = _orders().get(order_id)
+        if not order:
+            return {"error": f"Order {order_id} not found"}
+        return order
+
     # Extract routing fields from the proxy integration event.
     resource = event.get("resource", "")        # e.g. "/orders/{order_id}"
     method   = event.get("httpMethod", "GET")

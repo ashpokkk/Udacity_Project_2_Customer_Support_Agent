@@ -81,39 +81,6 @@ def get_namespaces(mem_client: MemoryClient, memory_id: str) -> Dict[str, str]:
     return namespaces
 
 
-def retrieve_customer_context(actor_id: str, query: str) -> str:
-    """Retrieve cross-session customer memories before agent invocation."""
-    if not configured(MEMORY_ID) or not query.strip():
-        return ""
-
-    memories = []
-    for strategy_type, template in get_namespaces(memory_client, MEMORY_ID).items():
-        namespace = template.replace("{actorId}", actor_id)
-        namespace = namespace.replace("/{sessionId}", "")
-        try:
-            results = memory_client.retrieve_memories(
-                memory_id=MEMORY_ID,
-                namespace_path=namespace,
-                query=query,
-                top_k=5,
-            )
-            entries = results if isinstance(results, list) else results.get(
-                "memories", results.get("results", [])
-            )
-            for entry in entries:
-                content = entry.get("content", entry.get("text", ""))
-                if isinstance(content, dict):
-                    content = content.get("text", "")
-                elif not isinstance(content, str):
-                    content = str(content) if content else ""
-                if content:
-                    memories.append(f"[{strategy_type}] {content}")
-        except Exception:
-            logger.exception("Pre-invocation memory retrieval failed for %s", strategy_type)
-
-    logger.warning("Pre-invocation memory retrieval found %s records", len(memories))
-    return "\n".join(memories)
-
 
 class MemoryHook(HookProvider):
     """Retrieve customer memories before a turn and save the turn afterward."""
@@ -124,6 +91,7 @@ class MemoryHook(HookProvider):
         self.memory_client = memory_client
         self.memory_id = memory_id
         self.namespaces = get_namespaces(memory_client, memory_id) if configured(memory_id) else {}
+        self.original_user_query = ""
 
     def retrieve_customer_context(self, event: MessageAddedEvent):
         if not configured(self.memory_id):
@@ -139,6 +107,7 @@ class MemoryHook(HookProvider):
         if not query:
             return
 
+        self.original_user_query = query
         memories = []
         for strategy_type, template in self.namespaces.items():
             namespace = template.replace("{actorId}", self.actor_id)
@@ -168,7 +137,7 @@ class MemoryHook(HookProvider):
         if not configured(self.memory_id):
             return
         messages = getattr(event.agent, "messages", [])
-        user_query = ""
+        user_query = self.original_user_query
         assistant_response = ""
 
         for message in reversed(messages):
@@ -217,6 +186,7 @@ def calculate_local_fallback(
         "points_redeemed": 0,
         "points_discount": 0.0,
         "tier_discount": tier_discount,
+        "tier_discount_pct": round(rate * 100, 2),
         "final_total": round(
             max(0.0, order_total - tier_discount), 2
         ),
@@ -259,12 +229,9 @@ def calculate_loyalty_locally(
 
     points_redeemed = (points_redeemed // 500) * 500
 
-    points_discount = points_redeemed / 100.0
-
-    subtotal_after_points = max(
-        0.0,
-        order_total - points_discount,
-    )
+    # Record points redeemed without deducting their value from this order.
+    points_discount = 0.0
+    subtotal_after_points = max(0.0, order_total)
 
     tier_discount = subtotal_after_points * tier_rates.get(
         tier,
@@ -336,8 +303,10 @@ tier_rates = {{"Silver": 0.00, "Gold": 0.10, "Platinum": 0.15}}
 max_points = int(order_total * 0.50 * 100)
 points_redeemed = min(max(loyalty_points, 0), max_points)
 points_redeemed = (points_redeemed // 500) * 500
-points_discount = points_redeemed / 100.0
-subtotal_after_points = max(0.0, order_total - points_discount)
+# Record points redeemed without deducting their value from this order.
+points_discount = 0.0
+subtotal_after_points = max(0.0, order_total)
+tier_discount_pct = tier_rates.get(tier, 0.0) * 100
 tier_discount = subtotal_after_points * tier_rates.get(tier, 0.0)
 final_total = max(0.0, subtotal_after_points - tier_discount)
 total_savings = order_total - final_total
@@ -347,6 +316,7 @@ print(json.dumps({{
     "points_redeemed": points_redeemed,
     "points_discount": round(points_discount, 2),
     "tier_discount": round(tier_discount, 2),
+    "tier_discount_pct": tier_discount_pct,
     "final_total": round(final_total, 2),
     "total_savings": round(total_savings, 2),
     "points_earned": points_earned,
@@ -411,11 +381,27 @@ async def _run_agent(prompt: str, memory_hook: MemoryHook):
     )
 
     if configured(GATEWAY_URL):
-        with MCPClient(lambda: streamable_http_client(GATEWAY_URL)) as client:
-            gateway_tools = client.list_tools_sync()
-            tools.extend(gateway_tools)
-            agent = Agent(model=model, tools=tools, hooks=[memory_hook], system_prompt=system_prompt)
-            return agent(prompt)
+        try:
+            with MCPClient(lambda: streamable_http_client(GATEWAY_URL)) as client:
+                try:
+                    gateway_tools = client.list_tools_sync()
+                    tools.extend(gateway_tools)
+                except (TimeoutError, ConnectionError):
+                    logger.exception("Gateway tool discovery timed out or failed")
+                except Exception:
+                    logger.exception("Gateway tool discovery failed")
+
+                agent = Agent(
+                    model=model,
+                    tools=tools,
+                    hooks=[memory_hook],
+                    system_prompt=system_prompt,
+                )
+                return agent(prompt)
+        except (TimeoutError, ConnectionError):
+            logger.exception("Gateway connection failed; continuing without Gateway tools")
+        except Exception:
+            logger.exception("Gateway unavailable; continuing without Gateway tools")
 
     agent = Agent(model=model, tools=tools, hooks=[memory_hook], system_prompt=system_prompt)
     return agent(prompt)
@@ -434,14 +420,6 @@ async def invoke(payload, context=None):
         actor_id = str(payload.get("customer_id") or "anonymous")
         session_id = str(payload.get("session_id") or uuid.uuid4())
         memory_hook = MemoryHook(actor_id, session_id, memory_client, MEMORY_ID)
-        customer_context = retrieve_customer_context(actor_id, prompt)
-        if customer_context:
-            prompt = (
-                "Customer Context (retrieved from this customer's saved memory):\n"
-                + customer_context
-                + "\n\nUser's current message:\n"
-                + prompt
-            )
         response = await _run_agent(prompt, memory_hook)
 
         content = getattr(response, "message", {}).get("content", [])

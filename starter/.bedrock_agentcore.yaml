@@ -4,12 +4,12 @@ agents:
     name: customer_support_agent
     language: python
     node_version: '20'
-    entrypoint: D:/AI AGENT/cd14763-project-starter/starter/main.py
+    entrypoint: main.py
     deployment_type: direct_code_deploy
     runtime_type: PYTHON_3_13
     platform: linux/arm64
     container_runtime: null
-    source_path: D:\AI AGENT\cd14763-project-starter\starter
+    source_path: .
     aws:
       execution_role: arn:aws:iam::391446743765:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-aa96c3a063
       execution_role_auto_create: false
